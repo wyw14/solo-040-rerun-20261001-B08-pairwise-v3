@@ -92,6 +92,7 @@ func NewRuntime(ctx context.Context, dataDirectory string) (*Runtime, error) {
 	safetyCoordinator = safety.NewCoordinator(gateCommands, barrier, recorder, now)
 	safetyService := safety.NewService(safetyCoordinator, cycleCoordinator)
 	signalService.BindTransitLookup(cycleCoordinator)
+	signalService.BindPlanLookup(planner)
 	replayer := journal.NewReplayer(store)
 	recovery := cycle.NewRecovery(replayer, cycleCoordinator)
 	if _, err := recovery.RestoreAll(ctx); err != nil {

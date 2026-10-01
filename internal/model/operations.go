@@ -74,6 +74,11 @@ type SignalState struct {
 	UpdatedAt  time.Time    `json:"updated_at"`
 }
 
+// MatchesCycle reports whether the signal was published for the given transit generation.
+func (s SignalState) MatchesCycle(cycleID uuid.UUID, generation uint64) bool {
+	return s.CycleID == cycleID && s.Generation == generation
+}
+
 type EmergencyStatus string
 
 const (
