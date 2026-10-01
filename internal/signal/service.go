@@ -12,7 +12,7 @@ import (
 
 type TransitLookup interface {
 	Current(string) (model.TransitCycle, bool)
-	ApplySignalHandoff(context.Context, uuid.UUID, uint64) error
+	ApplySignalHandoff(context.Context, string, uuid.UUID, uint64) error
 }
 
 type Handoff struct {
@@ -48,7 +48,7 @@ func (s *Service) ConfirmHandoff(ctx context.Context, handoff Handoff) error {
 	if !current.IdentityMatches(handoff.CycleID, handoff.Generation) {
 		return errors.New("handoff belongs to another transit generation")
 	}
-	if err := s.lookup.ApplySignalHandoff(ctx, handoff.CycleID, handoff.Generation); err != nil {
+	if err := s.lookup.ApplySignalHandoff(ctx, handoff.ChamberID, handoff.CycleID, handoff.Generation); err != nil {
 		return err
 	}
 	s.mu.Lock()

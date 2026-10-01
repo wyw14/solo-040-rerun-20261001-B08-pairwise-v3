@@ -32,6 +32,9 @@ func NewPublisher(store *Store, recorder *journal.Recorder, now func() time.Time
 }
 
 func (p *Publisher) Publish(ctx context.Context, cycle model.TransitCycle, vessels []model.Vessel, aspect model.SignalAspect) (Publication, error) {
+	if len(vessels) == 0 {
+		return Publication{}, errors.New("signal publication requires at least one vessel")
+	}
 	publication := Publication{
 		CycleID: cycle.ID, Generation: cycle.Generation,
 		Previous: make(map[uuid.UUID]model.SignalState),
@@ -46,6 +49,9 @@ func (p *Publisher) Publish(ctx context.Context, cycle model.TransitCycle, vesse
 		}
 		state := p.store.Set(vessel.ID, cycle.ID, cycle.Generation, aspect, p.now())
 		publication.Published = append(publication.Published, vessel.ID)
+		if aspect == model.SignalProceed {
+			p.store.MarkRelease(cycle.ID, cycle.Generation, vessel.ID)
+		}
 		if _, err := p.recorder.Record(ctx, cycle.ChamberID, model.EventSignalChanged, cycle.ID, cycle.Generation, state); err != nil {
 			p.Compensate(context.WithoutCancel(ctx), cycle.ChamberID, publication)
 			return publication, err
@@ -58,6 +64,7 @@ func (p *Publisher) Compensate(ctx context.Context, chamberID string, publicatio
 	var combined error
 	for index := len(publication.Published) - 1; index >= 0; index-- {
 		vesselID := publication.Published[index]
+		p.store.RevokeRelease(publication.CycleID, publication.Generation, vesselID)
 		if previous, ok := publication.Previous[vesselID]; ok {
 			p.store.Set(previous.VesselID, previous.CycleID, previous.Generation, previous.Aspect, p.now())
 		} else {

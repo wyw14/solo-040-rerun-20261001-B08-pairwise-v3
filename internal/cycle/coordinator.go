@@ -11,6 +11,7 @@ import (
 	"github.com/wyw14/cry-96/internal/hydraulics"
 	"github.com/wyw14/cry-96/internal/journal"
 	"github.com/wyw14/cry-96/internal/model"
+	"github.com/wyw14/cry-96/internal/signal"
 )
 
 // Coordinator is the authoritative owner of active transit generations.
@@ -20,17 +21,19 @@ type Coordinator struct {
 	generations map[string]uint64
 	gates       *gate.Controller
 	hydraulics  *hydraulics.Controller
+	signals     *signal.Store
 	recorder    *journal.Recorder
 	now         func() time.Time
 }
 
-func NewCoordinator(gates *gate.Controller, hydraulicsController *hydraulics.Controller, recorder *journal.Recorder, now func() time.Time) *Coordinator {
+func NewCoordinator(gates *gate.Controller, hydraulicsController *hydraulics.Controller, signalStore *signal.Store, recorder *journal.Recorder, now func() time.Time) *Coordinator {
 	if now == nil {
 		now = time.Now
 	}
 	return &Coordinator{
 		current: make(map[string]model.TransitCycle), generations: make(map[string]uint64),
-		gates: gates, hydraulics: hydraulicsController, recorder: recorder, now: now,
+		gates: gates, hydraulics: hydraulicsController, signals: signalStore,
+		recorder: recorder, now: now,
 	}
 }
 
@@ -41,7 +44,11 @@ func (c *Coordinator) Start(ctx context.Context, plan model.ConvoyPlan) (model.T
 		return model.TransitCycle{}, errors.New("chamber already has an active transit")
 	}
 	c.generations[plan.ChamberID]++
-	cycleValue, err := model.NewTransitCycle(plan.ChamberID, plan.ID, plan.Direction, c.generations[plan.ChamberID], c.now())
+	convoy := make([]uuid.UUID, 0, len(plan.Vessels))
+	for _, vessel := range plan.Vessels {
+		convoy = append(convoy, vessel.ID)
+	}
+	cycleValue, err := model.NewTransitCycle(plan.ChamberID, plan.ID, plan.Direction, c.generations[plan.ChamberID], convoy, c.now())
 	if err == nil {
 		c.current[plan.ChamberID] = cycleValue
 	}
@@ -110,21 +117,18 @@ func (c *Coordinator) ApplyGateAck(ctx context.Context, ack model.DeviceAck) err
 	return err
 }
 
-func (c *Coordinator) ApplySignalHandoff(ctx context.Context, cycleID uuid.UUID, generation uint64) error {
+func (c *Coordinator) ApplySignalHandoff(ctx context.Context, chamberID string, cycleID uuid.UUID, generation uint64) error {
 	c.mu.Lock()
-	var chamberID string
-	var cycleValue model.TransitCycle
-	for id, candidate := range c.current {
-		if candidate.IdentityMatches(cycleID, generation) {
-			chamberID, cycleValue = id, candidate
-			break
-		}
-	}
-	if chamberID == "" {
+	cycleValue, ok := c.current[chamberID]
+	if !ok {
 		c.mu.Unlock()
 		return errors.New("signal handoff transit is not current")
 	}
-	if err := applySignalTransition(&cycleValue); err != nil {
+	if !cycleValue.IdentityMatches(cycleID, generation) {
+		c.mu.Unlock()
+		return errors.New("signal handoff belongs to an inactive transit generation")
+	}
+	if err := applySignalTransition(&cycleValue, c.releasedVessels(cycleValue)); err != nil {
 		c.mu.Unlock()
 		return err
 	}
@@ -133,6 +137,16 @@ func (c *Coordinator) ApplySignalHandoff(ctx context.Context, cycleID uuid.UUID,
 	c.mu.Unlock()
 	_, err := c.recorder.Record(ctx, chamberID, model.EventCycleAdvanced, cycleValue.ID, generation, cycleValue)
 	return err
+}
+
+// releasedVessels reports which convoy members have a published release signal
+// for the cycle's exact generation. The release ledger is maintained solely by
+// the signal Publisher, so admission signalling can never satisfy a handoff.
+func (c *Coordinator) releasedVessels(cycleValue model.TransitCycle) []uuid.UUID {
+	if c.signals == nil {
+		return nil
+	}
+	return c.signals.ReleasedVessels(cycleValue.ID, cycleValue.Generation)
 }
 
 func (c *Coordinator) Restore(cycleValue model.TransitCycle) {

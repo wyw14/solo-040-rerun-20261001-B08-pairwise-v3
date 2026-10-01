@@ -87,7 +87,7 @@ func NewRuntime(ctx context.Context, dataDirectory string) (*Runtime, error) {
 		interlock.DefaultPolicy(), interlock.NewArbiter(), gateController,
 		levelByChamber, emergencyActive,
 	)
-	cycleCoordinator := cycle.NewCoordinator(gateController, hydraulicsController, recorder, now)
+	cycleCoordinator := cycle.NewCoordinator(gateController, hydraulicsController, signalStore, recorder, now)
 	cycleService := cycle.NewService(cycleCoordinator, admissionService)
 	safetyCoordinator = safety.NewCoordinator(gateCommands, barrier, recorder, now)
 	safetyService := safety.NewService(safetyCoordinator, cycleCoordinator)
